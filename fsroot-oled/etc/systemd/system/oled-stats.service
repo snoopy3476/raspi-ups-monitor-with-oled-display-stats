@@ -1,0 +1,11 @@
+[Unit]
+Description=OLED Stats Display Service
+
+[Service]
+Type=exec
+Restart=always
+RestartSec=30
+ExecStart=/usr/bin/python3 /usr/local/sbin/oled-stats
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+/var/log/ups-monitor.log {
+    missingok
+    notifempty
+    rotate 4
+    weekly
+    create
+}

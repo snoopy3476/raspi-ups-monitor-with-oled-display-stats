@@ -1,0 +1,12 @@
+[Unit]
+Description=UPS Monitoring Service
+
+[Service]
+Type=exec
+Restart=always
+RestartSec=30
+
+ExecStart=/bin/sh -c "/usr/bin/python3 /usr/local/sbin/ups-monitor | /usr/bin/tee -a /var/log/ups-monitor.log"
+
+[Install]
+WantedBy=multi-user.target

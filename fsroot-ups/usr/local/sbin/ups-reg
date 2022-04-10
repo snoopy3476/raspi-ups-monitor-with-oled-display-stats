@@ -1,0 +1,194 @@
+#!/bin/sh
+
+# [ups-reg]
+#
+# simple tool for reading/writing registers of 52pi EP-0136 ups in operation mode:
+#   https://wiki.52pi.com/index.php?title=EP-0136
+#
+# Author: Kim Hwiwon <kim.hwiwon@outlook.com>
+# License: The MIT License
+
+# Usage
+#
+# $ ups-reg list
+# $ ups-reg get <register-name>
+# $ ups-reg set <register-name> <new-value>
+#
+
+# Register list
+# reg-name	addr	len	unit	range-of-value  	description
+REG_LIST="
+mcu-volt	0x01	2	mV	   2400 -  3600 	Voltage of UPS's MCU
+pogo-volt	0x03	2	mV	      0 -  5500 	Voltage of Pogopin's Bottom
+batt-volt	0x05	2	mV	      0 -  4500 	Voltage of Batteries' Terminal
+cport-volt	0x07	2	mV	      0 - 13500 	Voltage of USB-C Charging Port
+mport-volt	0x09	2	mV	      0 - 13500 	Voltage of MicroUSB Charging Port
+batt-temp	0x0B	2	°C	    -20 -    65 	Batteries Temperature
+batt-volt-max	0x0D	2	mV	      0 -  4500 	Full Voltage
+batt-volt-min	0x0F	2	mV	      0 -  4500 	Empty Voltage
+batt-volt-lim	0x11	2	mV	      0 -  4500 	Protection Voltage
+batt-level	0x13	2	%	      0 -   100 	Battery Remaining
+sample-period	0x15	2	min	      0 -  1440 	Sample Period
+ups-opmode	0x17	1	T/F	 0 | 1          	Power Status/Operation Mode
+shutdown-start	0x18	1	sec	 0(F) | 10 - 255	Shutdown Countdown
+auto-powerup	0x19	1	T/F	 0 | 1          	Back-To-AC Auto Power up
+restart-start	0x1A	1	sec	 0(F) | 10 - 255	Restart Countdown
+factory-reset	0x1B	1	T/F	 0 | 1          	Reset to Factory Defaults
+ups-uptime-tot	0x1C	4	sec	      0 - i32max	Cumulative Running Time
+ups-chargetime	0x20	4	sec	      0 - i32max	Accumulated Charging Time
+ups-uptime	0x24	4	sec	      0 - i32max	Running Time
+ups-version	0x28	2	-	 1              	Version
+batt-customed	0x2A	1	T/F	 0 | 1          	(FW.V5+) Battery Parameters self-programmed by user
+ups-serial	0xF0	12	-	 12Bmin - 12Bmax	Serial Number: '0x' + UID2 (4B) + UID1 (4B) + UID0 (4B)
+"
+
+
+
+
+I2CBUS=1
+CHIP_ADDR=0x17
+
+### i2c command adapter functions ###
+
+i2cget_dev() {
+	i2cget -y "$I2CBUS" "$CHIP_ADDR" "$@"
+	return $?
+}
+i2cset_dev() {
+	i2cset -y "$I2CBUS" "$CHIP_ADDR" "$@"
+	return $?
+}
+
+read_1b() {
+	VAL="$(i2cget_dev "$1" b)"
+	EXITCODE="$?"
+	printf "%d\n" "$VAL"
+	return "$EXITCODE"
+}
+write_1b() {
+	i2cset_dev "$1" "$2" b
+	return $?
+}
+
+read_2b() {
+	VAL="$(i2cget_dev "$1" w)"
+	EXITCODE="$?"
+	printf "%d\n" "$VAL"
+	return "$EXITCODE"
+}
+write_2b() {
+	i2cset_dev "$1" "$2" w
+	return $?
+}
+
+read_4b() {
+	VAL1="$(i2cget_dev "$1" w)"
+	EXITCODE1="$?"
+	VAL2="$(i2cget_dev "$(($1 + 2))" w)"
+	EXITCODE2="$?"
+	printf "%d\n" "$(( VAL1 + (VAL2 << 16) ))" 2> /dev/null
+	return $(( EXITCODE1 | EXITCODE2 ))
+}
+
+read_12b() {
+	read_nb "$1" 12
+	return $?
+}
+
+read_nb() {
+	printf "0x%s\n" "$(printf "%02x" $( for offset in $(seq "$(($2 - 1))" -1 0); do i2cget_dev "$(($1 + offset))" b; done ) )"
+	return $?
+}
+
+
+
+
+# run command
+run_with_reg() {
+
+	MODE="$1"
+	REGNAME="$2"
+	NEWVAL="$3"
+
+
+
+	# Set mode
+	if [ "$MODE" = "get" ]
+	then
+	        FN_PREFIX="read_"
+	        NEWVAL=
+	elif [ "$MODE" = "set" ]
+	then
+	        FN_PREFIX="write_"
+	else
+	        printf "Invalid mode '%s'!\n" "$MODE" 1>&2
+	        exit 2
+	fi
+
+
+	# Set register
+	REG_DETAILS="$(printf "%s" "$REG_LIST" | grep "^$REGNAME	" | tr -s ' ')"
+	REGADDR="$(printf "%s" "$REG_DETAILS" | cut -f2)"
+	REGLEN="$(printf "%s" "$REG_DETAILS" | cut -f3)"
+
+	if [ -z "$REGADDR" ] || [ -z "$REGLEN" ]
+	then
+	        printf "Invalid register name '%s'!\n" "$REGNAME" 1>&2
+	        exit 3
+	fi
+
+
+
+	# Run
+	FNNAME="$FN_PREFIX""$REGLEN"b
+	eval "$FNNAME $REGADDR $NEWVAL"
+	return $?
+}
+
+
+
+
+### MAIN ROUTINE ###
+
+if [ "$(id -u)" -ne 0 ]
+then
+	printf "Run as root!\n" 1>&2
+	exit 1
+fi
+
+
+
+# If no argument - print help
+if [ "$#" -eq 0 ]
+then
+	BASENAME="$(basename "$0")"
+	printf "usage:	%s <list|get|set> ...\n\n" "$BASENAME" 1>&2
+	printf "	%s list\n" "$BASENAME" 1>&2
+	printf "	%s get <reg-name>\n" "$BASENAME" 1>&2
+	printf "	%s set <reg-name> <new-value>\n" "$BASENAME" 1>&2
+	printf "\n" 1>&2
+	exit 1
+
+
+# if list - show all details
+elif [ "$1" = "list" ]
+then
+	printf "\n< Register Details >\n[reg-name]\t[addr]\t[len]\t[unit]\t[range-of-value]\t[description]\n%s\n" "$REG_LIST"
+
+
+# if get with no arg - get all regs
+elif [ "$1" = "get" ] && [ "$#" -eq 1 ]
+then
+	REGNAME_LIST="$(printf "%s" "$REG_LIST" | cut -f1)"
+	for reg in $REGNAME_LIST
+	do
+		RESULT_VAL="$(run_with_reg get "$reg")"
+		printf "%s:\t%s\n" "$reg" "$RESULT_VAL"
+	done
+
+
+# else - get specific register
+else
+	run_with_reg "$1" "$2" "$3"
+	exit $?
+fi

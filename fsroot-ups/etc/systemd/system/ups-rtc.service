@@ -1,0 +1,11 @@
+[Unit]
+Description=Register I2C RTC Device
+
+[Service]
+Type=oneshot
+DefaultDependencies=no
+
+ExecStart=/bin/sh -c "echo ds1307 0x68 > /sys/class/i2c-adapter/i2c-1/new_device && /usr/sbin/hwclock -s || /usr/bin/true"
+
+[Install]
+WantedBy=multi-user.target

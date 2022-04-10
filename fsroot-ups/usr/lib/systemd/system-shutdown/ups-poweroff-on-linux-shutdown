@@ -1,0 +1,20 @@
+#!/bin/sh
+
+# [ups-poweroff-on-linux-shutdown]
+#
+# Trigger ups poweroff when linux shutdown.
+# When not charging: poweroff ups after 10 seconds from linux shutdown is triggered
+# When charging: poweroff ups after 30~120 seconds from linux shutdown is triggered
+#
+# Place this script in '/usr/lib/systemd/system-shutdown/'
+
+if [ "$#" -ge 1 ] && [ "poweroff" = "$@" ]
+then
+	COUNTDOWN=10
+	if [ "$(printf '%d' $(/usr/sbin/i2cget -y 1 0x17 0x07 w))" -gt 4000 ] || [ "$(printf '%d' $(/usr/sbin/i2cget -y 1 0x17 0x09 w))" -gt 4000 ]
+	then
+		COUNTDOWN=3
+	fi
+
+	/usr/sbin/i2cset -y 1 0x17 0x18 "$COUNTDOWN"
+fi

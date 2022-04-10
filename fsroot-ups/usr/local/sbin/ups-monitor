@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+
+# [ups-monitor]
+#
+# A script for monitoring 52pi UPS Plus, and trigger safe shutdown when low battery.
+#
+# Author: Kim Hwiwon <kim.hwiwon@outlook.com>
+# License: The MIT License
+#
+# usage: ups-monitor [-r] [-s]
+#                    -r: Readonly mode
+#                        Monitoring only: do not trigger shutdown evenif on low battery
+#                    -s: Single output mode
+#                        Do not loop forever: just print result once and exit
+
+
+from os import sync, system
+from sys import stdout, argv
+from time import sleep
+from datetime import datetime
+from smbus2 import SMBus
+from ina219 import INA219
+
+
+
+
+
+### config ###
+BATT_VOLTS_THRESHOLD_OFFSET_TO_SHUTDOWN = +100
+UPS_POWERDOWN_SECS_AFTER_SHUTDOWN_TRIGGERED = 20
+DEVICE_BUS = 1
+DEVICE_ADDR = 0x17
+PRINT_DETAILS_MINS = 10
+print_details_count = PRINT_DETAILS_MINS
+
+
+
+### init ###
+bus = SMBus(DEVICE_BUS)
+ina_pi = INA219(0.00725, address=0x40)
+ina_batt = INA219(0.005, address=0x45)
+IS_READONLY = (len(argv) > 1) and (argv[1] == "-r")
+IS_SINGLE_OUTPUT = (len(argv) > 1) and (argv[1] == "-s")
+
+
+
+
+### helper function ###
+def bus_read_word_data (addr):
+	ret_val = 0
+	while ret_val <= 0:
+                try: ret_val = bus.read_word_data(DEVICE_ADDR, addr)
+                except: pass
+	return ret_val
+
+def bus_write_byte_data (addr, val):
+	write_done = False
+	while not write_done:
+		try:
+			bus.write_byte_data(DEVICE_ADDR, addr, val)
+			write_done = True
+		except:
+			pass
+
+
+
+##### main routine #####
+while True:
+
+	### loop init ###
+	ina_pi.configure()
+	ina_batt.configure()
+
+
+	### get data ###
+
+	# pi
+	pi_V = ina_pi.voltage()
+	pi_A = ina_pi.current() / 1000
+	pi_W = ina_pi.power() / 1000
+
+	# battery
+	batt_V = ina_batt.voltage()
+	batt_A = ina_batt.current() / 1000
+	batt_W = ina_batt.power() / 1000
+	batt_protect_V = bus_read_word_data(0x11)
+	batt_level = bus_read_word_data(0x13)
+
+	# ups
+	charge_V_c = bus_read_word_data(0x7)
+	charge_V_micro = bus_read_word_data(0x9)
+
+	if charge_V_c > 4000:
+		charge_status = "+"
+	elif charge_V_micro > 4000:
+		charge_status = "m"
+	else:
+		charge_status = "-"
+
+
+
+	# print info on every n times
+	print_details_count += 1
+	if print_details_count >= PRINT_DETAILS_MINS:
+		print_details_count = 0
+		print(f"[{datetime.now().isoformat()}]\tState:\t[RPI]\t{pi_V:.3f}V\t{pi_A:.3f}A\t{pi_W:.3f}W\t[BAT]{charge_status}\t{batt_V:.3f}V\t{batt_A:.3f}A\t{batt_W:.3f}W\t{batt_level:.0f}%")
+		stdout.flush()
+
+	# if not readonly mode, trigger shutdown if battery low and not charging
+	if (not IS_READONLY) and charge_status == "-" and ((batt_V * 1000) < (batt_protect_V + BATT_VOLTS_THRESHOLD_OFFSET_TO_SHUTDOWN)):
+
+		print(f"[{datetime.now().isoformat()}]\tShutdown triggered!")
+		stdout.flush()
+
+		sync()
+		bus_write_byte_data(0x18, UPS_POWERDOWN_SECS_AFTER_SHUTDOWN_TRIGGERED)
+		system("shutdown now")
+
+		exit(0)
+
+
+	# if single mode - no loop
+	if IS_SINGLE_OUTPUT:
+		exit(0)
+
+
+	# Repeat every 1 min
+	sleep(60)
